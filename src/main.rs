@@ -1,18 +1,22 @@
-use std::{fs::{self, File}, io::{BufRead, BufReader}, path::PathBuf};
+use std::{
+    fs::{self, File},
+    io::{self, BufRead, BufReader, Read, Seek, Write},
+    path::PathBuf,
+};
 
 use clap::{Parser, Subcommand};
-use flate2::read::ZlibDecoder;
+use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
+use hex::ToHex;
+use sha1::{Digest, Sha1};
 
-#[derive(Debug)]
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(version, about = "git cmd tool in rust", long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Command
+    command: Command,
 }
 
-#[derive(Debug)]
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Command {
     /// Initialize a git repository in the current directory
     Init,
@@ -24,6 +28,31 @@ enum Command {
         #[arg(short)]
         pretty_print: bool,
     },
+    /// Compute object hash and optionally creates a blob from a file
+    HashObject {
+        /// The file to hash
+        file: PathBuf,
+        /// Actually write the object into the object database.
+        #[arg(short)]
+        write: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ObjectType {
+    Blob,
+}
+
+impl std::fmt::Display for ObjectType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Blob => "blob",
+            }
+        )
+    }
 }
 
 fn main() {
@@ -34,10 +63,17 @@ fn main() {
             Ok(_) => (),
             Err(e) => eprintln!("Failed to initialize git repository: {}", e),
         },
-        Command::CatFile { object: hash, pretty_print } => match cat_file(hash, pretty_print) {
+        Command::CatFile {
+            object: hash,
+            pretty_print,
+        } => match cat_file(hash, pretty_print) {
             Ok(_) => (),
             Err(e) => eprintln!("cat-file failed: {}", e),
-        }
+        },
+        Command::HashObject { file, write } => match hash_object(file, write) {
+            Ok(_) => (),
+            Err(e) => eprintln!("hash-object failed: {}", e),
+        },
     }
 }
 
@@ -56,21 +92,77 @@ fn cat_file(hash: String, pretty_print: bool) -> anyhow::Result<()> {
     file_path.push(&hash[..2]);
     file_path.push(&hash[2..]);
     let mut file = BufReader::new(ZlibDecoder::new(File::open(file_path)?));
-    // std::io::copy(&mut file, &mut &std::io::stdout())?;
+    // io::copy(&mut file, &mut &io::stdout())?;
     let mut buffer = vec![];
     file.read_until(b' ', &mut buffer)?;
-    let obj_type = std::str::from_utf8(&buffer)?.trim_end().to_owned();
+    let _obj_type = std::str::from_utf8(&buffer)?.trim_end().to_owned();
 
     buffer.clear();
     file.read_until(0, &mut buffer)?;
-    let obj_size = std::str::from_utf8(&buffer)?.trim_end_matches('\0').parse::<u64>()?;
+    let _obj_size = std::str::from_utf8(&buffer)?
+        .trim_end_matches('\0')
+        .parse::<u64>()?;
 
-    eprintln!("Object type: {}", obj_type);
-    eprintln!("Object size: {}", obj_size);
+    // eprintln!("Object type: {}", obj_type);
+    // eprintln!("Object size: {}", obj_size);
 
     if pretty_print {
-        std::io::copy(&mut file, &mut &std::io::stdout())?;
+        io::copy(&mut file, &mut &io::stdout())?;
     }
 
+    Ok(())
+}
+
+fn hash_object(file: PathBuf, write: bool) -> anyhow::Result<()> {
+    let mut file = File::open(file)?;
+    let object_type = ObjectType::Blob;
+    let object_length = file.metadata()?.len();
+
+    let mut hasher = Sha1::new();
+    write_object_to(object_type, object_length, &mut file, &mut hasher)?;
+    let object_hash: String = hasher.finalize().encode_hex();
+
+    println!("{}", object_hash);
+
+    if write {
+        file.rewind()?;
+        write_object(object_hash, object_type, object_length, &mut file)?;
+    }
+
+    Ok(())
+}
+
+// -----------------------------------------------------------
+
+fn write_object<R: Read>(
+    object_hash: String,
+    object_type: ObjectType,
+    object_length: u64,
+    object_data: &mut R,
+) -> anyhow::Result<()> {
+    let mut path = PathBuf::from(".git/objects");
+    path.push(&object_hash[..2]);
+
+    if !path.exists() {
+        fs::create_dir(&path)?;
+    }
+
+    path.push(&object_hash[2..]);
+
+    let mut file = ZlibEncoder::new(File::create(path)?, Compression::default());
+    write_object_to(object_type, object_length, object_data, &mut file)?;
+    file.try_finish()?;
+
+    Ok(())
+}
+
+fn write_object_to<R: Read, W: Write>(
+    object_type: ObjectType,
+    object_length: u64,
+    object_data: &mut R,
+    out: &mut W,
+) -> anyhow::Result<()> {
+    write!(out, "{} {}\0", object_type, object_length)?;
+    io::copy(object_data, out)?;
     Ok(())
 }
