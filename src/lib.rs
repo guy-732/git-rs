@@ -1,10 +1,4 @@
-use std::{
-    fs::{self, File},
-    io::{self, BufRead, BufReader, Read, Seek, Write},
-    path::PathBuf,
-    process::ExitCode,
-    str::FromStr,
-};
+use std::{process::ExitCode, str::FromStr};
 
 use clap::Parser;
 
