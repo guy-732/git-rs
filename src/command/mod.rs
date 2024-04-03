@@ -1,11 +1,11 @@
 use std::{
     fs::{self, File},
-    io::{self, BufRead, BufReader, Read, Seek, Write},
+    io::{self, Read, Seek, Write},
     path::PathBuf,
     process::ExitCode,
 };
 
-use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
+use flate2::{write::ZlibEncoder, Compression};
 use hex::ToHex;
 use sha1::{Digest, Sha1};
 
@@ -13,18 +13,15 @@ use clap::Subcommand;
 
 use crate::ObjectType;
 
+mod cat_file;
+mod init;
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Initialize a git repository in the current directory
-    Init,
+    Init(init::Args),
     /// Provide content of repository object
-    CatFile {
-        /// The hash of the object to inspect
-        object: String,
-        /// Pretty-print the contents of <object> based on its type.
-        #[arg(short)]
-        pretty_print: bool,
-    },
+    CatFile(cat_file::Args),
     /// Compute object hash and optionally creates a blob from a file
     HashObject {
         /// The file to hash
@@ -38,18 +35,15 @@ pub enum Command {
 impl Command {
     pub fn execute(self) -> ExitCode {
         match self {
-            Command::Init => match init() {
-                Ok(_) => ExitCode::SUCCESS,
+            Command::Init(args) => match init::init(args) {
+                Ok(code) => code,
                 Err(e) => {
                     eprintln!("Failed to initialize git repository: {}", e);
                     ExitCode::FAILURE
                 }
             },
-            Command::CatFile {
-                object: hash,
-                pretty_print,
-            } => match cat_file(hash, pretty_print) {
-                Ok(_) => ExitCode::SUCCESS,
+            Command::CatFile(args) => match cat_file::cat_file(args) {
+                Ok(code) => code,
                 Err(e) => {
                     eprintln!("cat-file failed: {}", e);
                     ExitCode::FAILURE
@@ -64,42 +58,6 @@ impl Command {
             },
         }
     }
-}
-
-fn init() -> anyhow::Result<()> {
-    fs::create_dir(".git")?;
-    fs::create_dir(".git/objects")?;
-    fs::create_dir(".git/refs")?;
-    fs::write(".git/HEAD", "ref: refs/heads/main\n")?;
-    println!("Initialized git directory");
-
-    Ok(())
-}
-
-fn cat_file(hash: String, pretty_print: bool) -> anyhow::Result<()> {
-    let mut file_path = PathBuf::from(".git/objects");
-    file_path.push(&hash[..2]);
-    file_path.push(&hash[2..]);
-    let mut file = BufReader::new(ZlibDecoder::new(File::open(file_path)?));
-    // io::copy(&mut file, &mut &io::stdout())?;
-    let mut buffer = vec![];
-    file.read_until(b' ', &mut buffer)?;
-    let _obj_type = std::str::from_utf8(&buffer)?.trim_end().to_owned();
-
-    buffer.clear();
-    file.read_until(0, &mut buffer)?;
-    let _obj_size = std::str::from_utf8(&buffer)?
-        .trim_end_matches('\0')
-        .parse::<u64>()?;
-
-    // eprintln!("Object type: {}", obj_type);
-    // eprintln!("Object size: {}", obj_size);
-
-    if pretty_print {
-        io::copy(&mut file, &mut &io::stdout())?;
-    }
-
-    Ok(())
 }
 
 fn hash_object(file: PathBuf, write: bool) -> anyhow::Result<()> {
