@@ -3,13 +3,12 @@ use std::{process::ExitCode, str::FromStr};
 use clap::Parser;
 
 mod command;
-use command::Command;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "git cmd tool in rust", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: command::Command,
 }
 
 impl Cli {
@@ -21,6 +20,9 @@ impl Cli {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ObjectType {
     Blob,
+    Tree,
+    Commit,
+    Tag,
 }
 
 impl std::fmt::Display for ObjectType {
@@ -30,6 +32,9 @@ impl std::fmt::Display for ObjectType {
             "{}",
             match self {
                 Self::Blob => "blob",
+                Self::Tree => "tree",
+                Self::Commit => "commit",
+                Self::Tag => "tag",
             }
         )
     }
@@ -41,6 +46,9 @@ impl FromStr for ObjectType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "blob" => Ok(Self::Blob),
+            "tree" => Ok(Self::Tree),
+            "commit" => Ok(Self::Commit),
+            "tag" => Ok(Self::Tag),
             other => Err(format!("object type {:?} is not recognized", other)),
         }
     }
